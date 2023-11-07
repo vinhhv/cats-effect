@@ -1,5 +1,7 @@
 package com.rockthejvm.part3concurrency
 
+import cats.effect.kernel.Outcome.{Canceled, Errored, Succeeded}
+import cats.effect.kernel.Resource
 import cats.effect.{IO, IOApp}
 import com.rockthejvm.utils.*
 
@@ -23,7 +25,7 @@ object Resources extends IOApp.Simple {
 
   val correctAsyncFetchUrl = for {
     conn <- IO(new Connection("rockthejvm"))
-    fib  <- (conn.open() *> IO.sleep(Int.MaxValue.seconds)).onCancel(conn.close().void).start
+    fib  <- (conn.open() *> IO.never).onCancel(conn.close().void).start
     _    <- IO.sleep(1.second) *> fib.cancel
   } yield ()
 
@@ -60,5 +62,80 @@ object Resources extends IOApp.Simple {
       IO(s"closing file at $path").debugs >> IO(scanner.close())
     }
 
-  override def run: IO[Unit] = bracketReadFile("src/main/scala/com/rockthejvm/part3concurrency/Resources.scala")
+  /**
+   * Resources
+   */
+  def connFromConfig(path: String): IO[Unit] =
+    openFileScanner(path)
+      .bracket { scanner =>
+        // acquire a connection based on the file
+        IO(new Connection(scanner.nextLine())).bracket { conn =>
+          conn.open() >> IO.never
+        }(conn => conn.close().void)
+      }(scanner => IO("closing file").debugs >> IO(scanner.close()))
+  // nesting resources are tedious
+
+  val connectionResource = Resource.make(IO(new Connection("rockthejvm.com")))(conn => conn.close().void)
+  // .. at a later part of the code
+  val resourceFetchUrl = for {
+    fib <- connectionResource.use(conn => conn.open() >> IO.never).start
+    _   <- IO.sleep(1.second) >> fib.cancel
+  } yield ()
+
+  // resources are equivalent to brackets
+  val simpleResource                      = IO("some resource")
+  val usingResource: String => IO[String] = string => IO(s"using the string: $string").debugs
+  val releaseResource: String => IO[Unit] = string => IO(s"finalize the string: $string").debugs.void
+
+  val usingResourceWithBracket  = simpleResource.bracket(usingResource)(releaseResource)
+  val usingResourceWithResource = Resource.make(simpleResource)(releaseResource).use(usingResource)
+
+  /**
+   * Exercise: read a text file with one line every 100 millis, using Resource
+   * (refactor the bracket exercise to use Resource)
+   */
+  def readTextFile(path: String): IO[Unit] = {
+    val scanner =
+      Resource.make(openFileScanner(path))(scanner => IO(s"closing file at $path").debugs >> IO(scanner.close()))
+    scanner.use(readLineByLine)
+  }
+
+  def cancelReadFile(path: String) = for {
+    fib <- readTextFile(path).start
+    _   <- IO.sleep(2.seconds) >> fib.cancel
+  } yield ()
+
+  // nested resources
+  def connFromConfResource(path: String): Resource[IO, Connection] =
+    Resource
+      .make(IO("opening file").debugs >> openFileScanner(path))(scanner =>
+        IO("closing file").debugs >> IO(scanner.close())
+      )
+      .flatMap(scanner => Resource.make(IO(new Connection(scanner.nextLine())))(conn => conn.close().void))
+
+  def connFromConfResourceClean(path: String): Resource[IO, Connection] = for {
+    scanner <- Resource
+      .make(IO("opening file").debugs >> openFileScanner(path))(scanner =>
+        IO("closing file").debugs >> IO(scanner.close())
+      )
+    conn <- Resource.make(IO(new Connection(scanner.nextLine())))(conn => conn.close().void)
+  } yield conn
+
+  val openConnection = connFromConfResourceClean("src/main/resources/connection.txt").use(_.open() *> IO.never)
+  val canceledConnection = for {
+    fib <- openConnection.start
+    _   <- IO.sleep(1.second) >> IO("cancelling!").debugs >> fib.cancel
+  } yield ()
+  // connection + file will close automatically
+
+  // finalizers to regular IOs
+  val ioWithFinalizer = IO("some resource").debugs.guarantee(IO("freeing resource").debugs.void)
+  val ioWithFinalizer_v2 =
+    (IO("some resource") >> IO.raiseError(new RuntimeException("something happened"))).debugs.guaranteeCase {
+      case Succeeded(fa) => fa.flatMap(result => IO(s"releasing resource: $result").debugs).void
+      case Errored(e)    => IO("nothing to release").debugs.void
+      case Canceled()    => IO("resource got canceled, releasing what's left").debugs.void
+    }
+
+  override def run: IO[Unit] = ioWithFinalizer_v2.void
 }
