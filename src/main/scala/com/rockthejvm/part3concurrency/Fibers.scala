@@ -1,8 +1,12 @@
 package com.rockthejvm.part3concurrency
 
+import cats.effect.Fiber
+import cats.effect.IO
+import cats.effect.IOApp
 import cats.effect.kernel.Outcome
-import cats.effect.kernel.Outcome.{Canceled, Errored, Succeeded}
-import cats.effect.{Fiber, IO, IOApp}
+import cats.effect.kernel.Outcome.Canceled
+import cats.effect.kernel.Outcome.Errored
+import cats.effect.kernel.Outcome.Succeeded
 import com.rockthejvm.utils.*
 
 import scala.concurrent.duration.*

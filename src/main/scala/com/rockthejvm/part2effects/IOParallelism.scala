@@ -1,7 +1,8 @@
 package com.rockthejvm.part2effects
 
 import cats.Parallel
-import cats.effect.{IO, IOApp}
+import cats.effect.IO
+import cats.effect.IOApp
 
 object IOParallelism extends IOApp.Simple {
 
@@ -46,7 +47,7 @@ object IOParallelism extends IOApp.Simple {
   val anotherFailure: IO[String] = IO.raiseError(new RuntimeException("Second failure"))
   val twoFailures: IO[String]    = (aFailure.debugs, anotherFailure.debugs).parMapN(_ + _)
   // the first effect to fail gives the failure of the result
-  val twoFailuresDelayed: IO[String]    = IO(Thread.sleep(1000)) >> (aFailure.debugs, anotherFailure.debugs).parMapN(_ + _)
+  val twoFailuresDelayed: IO[String] = IO(Thread.sleep(1000)) >> (aFailure.debugs, anotherFailure.debugs).parMapN(_ + _)
 
   override def run: IO[Unit] =
     twoFailuresDelayed.debugs.void
